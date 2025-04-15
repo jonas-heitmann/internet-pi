@@ -1,0 +1,96 @@
+---
+- name: Install vsftpd
+  ansible.builtin.apt:
+    name: vsftpd
+    state: present
+    update_cache: true
+
+- name: Create secure chroot dir for vsftpd
+  ansible.builtin.file:
+    path: /var/run/vsftpd/empty
+    state: directory
+    mode: '0755'
+    owner: rootFun
+    group: root
+
+- name: Ensure FTP user exists with login shell and password
+  ansible.builtin.user:
+    name: ftpuser
+    password: "{{ 'secure_password' | password_hash('sha512') }}"
+    home: /srv/ftp
+    shell: /bin/bash
+    create_home: true
+
+- name: Deny SSH login for ftpuser
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    line: "DenyUsers ftpuser"
+    create: true
+    state: present
+    mode: '0755'
+  notify: Restart SSH
+
+- name: Create FTP root directory
+  ansible.builtin.file:
+    path: /srv/ftp
+    state: directory
+    owner: ftpuser
+    group: ftpuser
+    mode: '0755'
+
+- name: Check if /etc/vsftpd.conf exists
+  ansible.builtin.stat:
+    path: /etc/vsftpd.conf
+  register: vsftpd_conf_stat
+
+- name: Backup original vsftpd.conf
+  ansible.builtin.copy:
+    src: /etc/vsftpd.conf
+    dest: /etc/vsftpd.conf.bak
+    remote_src: true
+    mode: '0644'
+  when: vsftpd_conf_stat.stat.exists
+
+- name: Deploy custom vsftpd.conf
+  ansible.builtin.copy:
+    dest: /etc/vsftpd.conf
+    content: |
+      listen=YES
+      anonymous_enable=NO
+      local_enable=YES
+      write_enable=YES
+      chroot_local_user=YES
+      allow_writeable_chroot=YES
+      secure_chroot_dir=/var/run/vsftpd/empty
+      local_umask=022
+      user_sub_token=$USER
+      local_root=/srv/ftp
+      pasv_min_port=10000
+      pasv_max_port=10100
+      pasv_enable=YES
+      pam_service_name=vsftpd
+      userlist_enable=YES
+      userlist_file=/etc/vsftpd.userlist
+      userlist_deny=NO
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Add FTP user to allowed list
+  ansible.builtin.lineinfile:
+    path: /etc/vsftpd.userlist
+    line: ftpuser
+    create: true
+    mode: '0644'
+
+- name: Ensure vsftpd is enabled and started
+  ansible.builtin.service:
+    name: vsftpd
+    state: started
+    enabled: true
+
+# Handler to restart sshd if DenyUsers is changed
+- name: Restart SSH
+  ansible.builtin.service:
+    name: ssh
+    state: restarted

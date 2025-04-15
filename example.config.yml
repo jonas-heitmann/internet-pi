@@ -48,3 +48,6 @@ airgradient_sensors:
 
 # Starlink configuration. (Also requires `monitoring_enable`)
 starlink_enable: false
+
+# FTP-Server configuration
+ftp_enable: false
