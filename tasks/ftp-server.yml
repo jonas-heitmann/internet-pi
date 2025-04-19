@@ -1,7 +1,13 @@
 ---
-- name: Install vsftpd
+- name: Ensure vsftpd is installed
   ansible.builtin.apt:
     name: vsftpd
+    state: present
+    update_cache: true
+
+- name: Ensure openssh-server is installed
+  ansible.builtin.apt:
+    name: openssh-server
     state: present
     update_cache: true
 
@@ -10,7 +16,7 @@
     path: /var/run/vsftpd/empty
     state: directory
     mode: '0755'
-    owner: rootFun
+    owner: root
     group: root
 
 - name: Ensure FTP user exists with login shell and password
@@ -21,37 +27,67 @@
     shell: /bin/bash
     create_home: true
 
-- name: Deny SSH login for ftpuser
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    line: "DenyUsers ftpuser"
-    create: true
-    state: present
-    mode: '0755'
-  notify: Restart SSH
+- name: Ensure SFTP-only user exists
+  ansible.builtin.user:
+    name: sftpuser
+    password: "{{ 'secure_password' | password_hash('sha512') }}"
+    home: /srv/ftp
+    shell: /usr/sbin/nologin
+    create_home: false
 
-- name: Create FTP root directory
+- name: Ensure sftpuser cannot write to chroot base (required by sshd)
   ansible.builtin.file:
     path: /srv/ftp
     state: directory
-    owner: ftpuser
-    group: ftpuser
-    mode: '0755'
+    owner: root
+    group: root
+    mode: '755'
 
-- name: Check if /etc/vsftpd.conf exists
-  ansible.builtin.stat:
-    path: /etc/vsftpd.conf
-  register: vsftpd_conf_stat
+- name: Create writable directory for sftpuser inside chroot
+  ansible.builtin.file:
+    path: /srv/ftp/upload
+    state: directory
+    owner: sftpuser
+    group: sftpuser
+    mode: '755'
 
-- name: Backup original vsftpd.conf
-  ansible.builtin.copy:
-    src: /etc/vsftpd.conf
-    dest: /etc/vsftpd.conf.bak
-    remote_src: true
-    mode: '0644'
-  when: vsftpd_conf_stat.stat.exists
+- name: Ensure Subsystem sftp is set to internal-sftp
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^Subsystem\\s+sftp'
+    line: 'Subsystem sftp internal-sftp'
+    state: present
+  notify: Restart ssh
 
-- name: Deploy custom vsftpd.conf
+- name: Ensure SSH password authentication is enabled
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PasswordAuthentication'
+    line: 'PasswordAuthentication yes'
+    state: present
+  notify: Restart ssh
+
+- name: Ensure SSH public key authentication is enabled
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PubkeyAuthentication'
+    line: 'PubkeyAuthentication yes'
+    state: present
+  notify: Restart ssh
+
+- name: Add SFTP-only config to sshd_config
+  ansible.builtin.blockinfile:
+    path: /etc/ssh/sshd_config
+    marker: "# {mark} ANSIBLE MANAGED BLOCK sftpuser"
+    block: |
+      Match User sftpuser
+        ChrootDirectory /srv/ftp
+        ForceCommand internal-sftp
+        AllowTCPForwarding no
+        X11Forwarding no
+  notify: Restart ssh
+
+- name: Deploy updated vsftpd.conf with secure_chroot_dir
   ansible.builtin.copy:
     dest: /etc/vsftpd.conf
     content: |
@@ -75,12 +111,14 @@
     owner: root
     group: root
     mode: '0644'
+  notify: Restart vsftpd
 
-- name: Add FTP user to allowed list
+- name: Add FTP user to allowed list (idempotent)
   ansible.builtin.lineinfile:
     path: /etc/vsftpd.userlist
     line: ftpuser
     create: true
+    state: present
     mode: '0644'
 
 - name: Ensure vsftpd is enabled and started
@@ -88,9 +126,3 @@
     name: vsftpd
     state: started
     enabled: true
-
-# Handler to restart sshd if DenyUsers is changed
-- name: Restart SSH
-  ansible.builtin.service:
-    name: ssh
-    state: restarted

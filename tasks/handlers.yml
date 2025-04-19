@@ -26,3 +26,13 @@
     build: never
     state: restarted
   become: false
+
+- name: Restart vsftpd
+  ansible.builtin.service:
+    name: vsftpd
+    state: restarted
+
+- name: Restart ssh
+  ansible.builtin.service:
+    name: ssh
+    state: restarted
