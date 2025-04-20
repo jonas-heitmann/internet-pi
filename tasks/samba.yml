@@ -1,0 +1,90 @@
+---
+# Enable samba
+- name: Ensure samba is installed
+  ansible.builtin.apt:
+    name: samba
+    state: present
+    update_cache: true
+
+- name: Ensure home directories are writable
+  ansible.builtin.replace:
+    path: /etc/samba/smb.conf
+    regexp: '(^\[homes\](?:\n(?!\[.*\]).*)*?)^\s*read only\s*=\s*\w+'
+    replace: '\1   read only = no'
+  notify: Restart samba
+
+# Set samba users
+- name: Ensure user 'jonasheitmann' exists
+  ansible.builtin.user:
+    name: "jonasheitmann"
+    state: present
+
+- name: Set samba password for user 'jonasheitmann'
+  ansible.builtin.shell: |
+    set -o pipefail
+    (echo 123456; echo 123456) | smbpasswd -s -a jonasheitmann
+  args:
+    executable: /bin/bash
+  become: true
+
+- name: Ensure user 'katharina' exists with password
+  ansible.builtin.user:
+    name: katharina
+    password: "{{ 'secure_password' | password_hash('sha512') }}"
+    shell: /usr/sbin/nologin
+    create_home: true
+
+- name: Set samba password for user 'katharina'
+  ansible.builtin.shell: |
+    set -o pipefail
+    (echo 123456; echo 123456) | smbpasswd -s -a katharina
+  args:
+    executable: /bin/bash
+  become: true
+
+# Create scan directories
+- name: Ensure directory 'Scanner' exists for user 'jonasheitmann'
+  ansible.builtin.file:
+    path: /home/jonasheitmann/Scanner
+    state: directory
+    owner: jonasheitmann
+    group: jonasheitmann
+    mode: '755'
+
+- name: Ensure directory 'Scanner' exists for user 'katharina'
+  ansible.builtin.file:
+    path: /home/katharina/Scanner
+    state: directory
+    owner: katharina
+    group: katharina
+    mode: '755'
+
+- name: Add scan share for 'jonasheitmann' to samba
+  ansible.builtin.blockinfile:
+    path: /etc/samba/smb.conf
+    block: |
+      [scan-jonas]
+      path = /home/jonasheitmann/Scanner
+      browseable = yes
+      read only = no
+      valid users = jonasheitmann
+    marker: "; ANSIBLE MANAGED BLOCK: scan-jonas share {mark}"
+    insertafter: EOF
+    append_newline: true
+    prepend_newline: true
+  notify: Restart samba
+
+- name: Add scan share for 'katharina' to samba
+  ansible.builtin.blockinfile:
+    path: /etc/samba/smb.conf
+    block: |
+      [scan-katharina]
+      path = /home/katharina/Scanner
+      browseable = yes
+      read only = no
+      valid users = katharina
+    marker: "; ANSIBLE MANAGED BLOCK: scan-katharina share {mark}"
+    insertafter: EOF
+    append_newline: true
+    prepend_newline: true
+  notify: Restart samba

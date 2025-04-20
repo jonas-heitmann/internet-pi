@@ -27,12 +27,7 @@
     state: restarted
   become: false
 
-- name: Restart vsftpd
+- name: Restart samba
   ansible.builtin.service:
-    name: vsftpd
-    state: restarted
-
-- name: Restart ssh
-  ansible.builtin.service:
-    name: ssh
+    name: smbd
     state: restarted

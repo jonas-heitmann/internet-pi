@@ -51,6 +51,6 @@
       ansible.builtin.import_tasks: tasks/starlink.yml
       when: starlink_enable
 
-    - name: Set up local FTP server.
-      ansible.builtin.import_tasks: tasks/ftp-server.yml
-      when: ftp_enable
+    - name: Set up local SMB server.
+      ansible.builtin.import_tasks: tasks/samba.yml
+      when: smb_enable
