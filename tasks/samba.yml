@@ -4,7 +4,6 @@
   ansible.builtin.apt:
     name: samba
     state: present
-    update_cache: true
 
 - name: Ensure home directories are writable
   ansible.builtin.replace:
@@ -14,77 +13,61 @@
   notify: Restart samba
 
 # Set samba users
-- name: Ensure user 'jonasheitmann' exists
+- name: Ensure linux users for samba exist
   ansible.builtin.user:
-    name: "jonasheitmann"
-    state: present
-
-- name: Set samba password for user 'jonasheitmann'
-  ansible.builtin.shell: |
-    set -o pipefail
-    (echo 123456; echo 123456) | smbpasswd -s -a jonasheitmann
-  args:
-    executable: /bin/bash
-  become: true
-
-- name: Ensure user 'katharina' exists with password
-  ansible.builtin.user:
-    name: katharina
-    password: "{{ 'secure_password' | password_hash('sha512') }}"
+    name: "{{ item.name }}"
+    password: "{{ item.password | default(omit) }}"
     shell: /usr/sbin/nologin
     create_home: true
+    update_password: on_create
+  loop:
+    - {name: 'jonas', password: "{{ user_password_jonas | password_hash('sha512') }}"}
+    - {name: 'katharina', password: "{{ user_password_katharina | password_hash('sha512') }}"}
 
-- name: Set samba password for user 'katharina'
+- name: Get existing samba users
+  ansible.builtin.command: pdbedit -L
+  register: samba_users
+  changed_when: false
+  become: true
+
+- name: Set samba passwords
   ansible.builtin.shell: |
     set -o pipefail
-    (echo 123456; echo 123456) | smbpasswd -s -a katharina
+    (echo {{ item.pass }}; echo {{ item.pass }}) | smbpasswd -s -a {{ item.name }}
   args:
     executable: /bin/bash
   become: true
+  loop:
+    - {name: 'jonas', pass: "{{ samba_password_jonas }}"}
+    - {name: 'katharina', pass: "{{ samba_password_katharina }}"}
+  when: item.name not in samba_users.stdout
 
 # Create scan directories
-- name: Ensure directory 'Scanner' exists for user 'jonasheitmann'
+- name: Ensure Scanner directories exist
   ansible.builtin.file:
-    path: /home/jonasheitmann/Scanner
+    path: "/home/{{ item }}/Scanner"
     state: directory
-    owner: jonasheitmann
-    group: jonasheitmann
+    owner: "{{ item }}"
+    group: "{{ item }}"
     mode: '755'
+  loop:
+    - jonas
+    - katharina
 
-- name: Ensure directory 'Scanner' exists for user 'katharina'
-  ansible.builtin.file:
-    path: /home/katharina/Scanner
-    state: directory
-    owner: katharina
-    group: katharina
-    mode: '755'
-
-- name: Add scan share for 'jonasheitmann' to samba
+- name: Add scan shares to samba
   ansible.builtin.blockinfile:
     path: /etc/samba/smb.conf
     block: |
-      [scan-jonas]
-      path = /home/jonasheitmann/Scanner
-      browseable = yes
+      [scan-{{ item }}]
+      path = /home/{{ item }}/Scanner
+      browseable = no
       read only = no
-      valid users = jonasheitmann
-    marker: "; ANSIBLE MANAGED BLOCK: scan-jonas share {mark}"
+      valid users = {{ item }}
+    marker: "; ANSIBLE MANAGED BLOCK: scan-{{ item }} share {mark}"
     insertafter: EOF
     append_newline: true
     prepend_newline: true
-  notify: Restart samba
-
-- name: Add scan share for 'katharina' to samba
-  ansible.builtin.blockinfile:
-    path: /etc/samba/smb.conf
-    block: |
-      [scan-katharina]
-      path = /home/katharina/Scanner
-      browseable = yes
-      read only = no
-      valid users = katharina
-    marker: "; ANSIBLE MANAGED BLOCK: scan-katharina share {mark}"
-    insertafter: EOF
-    append_newline: true
-    prepend_newline: true
+  loop:
+    - jonas
+    - katharina
   notify: Restart samba
