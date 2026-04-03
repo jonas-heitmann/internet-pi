@@ -10,6 +10,9 @@
         - example.config.yml
         - config.yml
 
+    - name: Load encrypted secrets
+      ansible.builtin.include_vars: vault.yml
+
     - name: Ensure apt cache is up to date.
       ansible.builtin.apt:
         update_cache: true
@@ -50,3 +53,7 @@
     - name: Set up Starlink Monitoring.
       ansible.builtin.import_tasks: tasks/starlink.yml
       when: starlink_enable
+
+    - name: Set up local SMB server.
+      ansible.builtin.import_tasks: tasks/samba.yml
+      when: smb_enable

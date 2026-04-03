@@ -26,3 +26,8 @@
     build: never
     state: restarted
   become: false
+
+- name: Restart samba
+  ansible.builtin.service:
+    name: smbd
+    state: restarted

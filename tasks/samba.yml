@@ -1,0 +1,73 @@
+---
+# Enable samba
+- name: Ensure samba is installed
+  ansible.builtin.apt:
+    name: samba
+    state: present
+
+- name: Ensure home directories are writable
+  ansible.builtin.replace:
+    path: /etc/samba/smb.conf
+    regexp: '(^\[homes\](?:\n(?!\[.*\]).*)*?)^\s*read only\s*=\s*\w+'
+    replace: '\1   read only = no'
+  notify: Restart samba
+
+# Set samba users
+- name: Ensure linux users for samba exist
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    password: "{{ item.password | default(omit) }}"
+    shell: /usr/sbin/nologin
+    create_home: true
+    update_password: on_create
+  loop:
+    - {name: 'jonas', password: "{{ user_password_jonas | password_hash('sha512') }}"}
+    - {name: 'katharina', password: "{{ user_password_katharina | password_hash('sha512') }}"}
+
+- name: Get existing samba users
+  ansible.builtin.command: pdbedit -L
+  register: samba_users
+  changed_when: false
+  become: true
+
+- name: Set samba passwords
+  ansible.builtin.shell: |
+    set -o pipefail
+    (echo {{ item.pass }}; echo {{ item.pass }}) | smbpasswd -s -a {{ item.name }}
+  args:
+    executable: /bin/bash
+  become: true
+  loop:
+    - {name: 'jonas', pass: "{{ samba_password_jonas }}"}
+    - {name: 'katharina', pass: "{{ samba_password_katharina }}"}
+  when: item.name not in samba_users.stdout
+
+# Create scan directories
+- name: Ensure Scanner directories exist
+  ansible.builtin.file:
+    path: "/home/{{ item }}/Scanner"
+    state: directory
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: '755'
+  loop:
+    - jonas
+    - katharina
+
+- name: Add scan shares to samba
+  ansible.builtin.blockinfile:
+    path: /etc/samba/smb.conf
+    block: |
+      [scan-{{ item }}]
+      path = /home/{{ item }}/Scanner
+      browseable = no
+      read only = no
+      valid users = {{ item }}
+    marker: "; ANSIBLE MANAGED BLOCK: scan-{{ item }} share {mark}"
+    insertafter: EOF
+    append_newline: true
+    prepend_newline: true
+  loop:
+    - jonas
+    - katharina
+  notify: Restart samba
