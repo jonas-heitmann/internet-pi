@@ -1,0 +1,50 @@
+---
+- name: Install lftp for FTP backup uploads.
+  ansible.builtin.package:
+    name: lftp
+    state: present
+
+- name: Install smbclient for SMB backup uploads.
+  ansible.builtin.package:
+    name: smbclient
+    state: present
+  when: backup_smb_enable | default(false)
+
+- name: Ensure backup log file exists.
+  ansible.builtin.file:
+    path: /var/log/internet-pi-backup.log
+    state: touch
+    mode: '0640'
+    owner: root
+    group: root
+    modification_time: preserve
+    access_time: preserve
+
+- name: Deploy backup script.
+  ansible.builtin.template:
+    src: templates/backup.sh.j2
+    dest: /usr/local/bin/internet-pi-backup
+    mode: '0750'
+    owner: root
+    group: root
+
+- name: Deploy restore script.
+  ansible.builtin.template:
+    src: templates/restore.sh.j2
+    dest: /usr/local/bin/internet-pi-restore
+    mode: '0750'
+    owner: root
+    group: root
+
+- name: Set up daily backup cron job.
+  ansible.builtin.cron:
+    name: "Internet Pi daily backup"
+    hour: "{{ backup_cron_hour | default('2') }}"
+    minute: "{{ backup_cron_minute | default('0') }}"
+    job: "/usr/local/bin/internet-pi-backup >> /var/log/internet-pi-backup.log 2>&1"
+    state: present
+
+- name: Restore from backup on initial setup.
+  ansible.builtin.command: /usr/local/bin/internet-pi-restore
+  when: backup_restore_on_setup | default(false)
+  changed_when: true

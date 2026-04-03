@@ -1,0 +1,33 @@
+---
+- name: Restore Internet Pi data from backup.
+  hosts: internet_pi
+  become: true
+
+  pre_tasks:
+    - name: Load configuration (with defaults from example file).
+      ansible.builtin.include_vars: "{{ item }}"
+      loop:
+        - example.config.yml
+        - config.yml
+
+    - name: Load encrypted secrets.
+      ansible.builtin.include_vars: vault.yml
+
+  tasks:
+    - name: Install lftp for FTP downloads.
+      ansible.builtin.package:
+        name: lftp
+        state: present
+
+    - name: Deploy restore script.
+      ansible.builtin.template:
+        src: templates/restore.sh.j2
+        dest: /usr/local/bin/internet-pi-restore
+        mode: '0750'
+        owner: root
+        group: root
+
+    - name: Run restore script.
+      ansible.builtin.command: /usr/local/bin/internet-pi-restore
+      when: backup_enable | default(false)
+      changed_when: true

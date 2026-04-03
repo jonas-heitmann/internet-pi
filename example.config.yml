@@ -51,3 +51,31 @@ starlink_enable: false
 
 # SMB-Server configuration
 smb_enable: true
+
+# Backup configuration.
+# Backs up Pi-hole and Grafana/Prometheus data to an FTP server (e.g. a NAS).
+# Passwords with double-quote (") characters must be escaped as \".
+backup_enable: false
+backup_ftp_host: "nas.home.local"
+backup_ftp_port: 21
+backup_ftp_user: "backup"
+backup_ftp_password: "change-this-password"
+backup_ftp_path: "/internet-pi"
+
+# Optional: also upload backups to an SMB share.
+backup_smb_enable: false
+backup_smb_share: "//nas.home.local/backups"
+backup_smb_path: "internet-pi"
+backup_smb_user: "backup"
+backup_smb_password: "change-this-password"
+
+# Number of daily backups to keep on the remote storage.
+backup_retention_days: 7
+
+# Schedule for the automatic daily backup (cron syntax).
+backup_cron_hour: "2"
+backup_cron_minute: "0"
+
+# Set to true to automatically restore the latest backup when running main.yml
+# on a new server. Requires backup_enable: true and valid FTP credentials.
+backup_restore_on_setup: false

@@ -1,0 +1,190 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# Internet Pi Backup Script
+#
+# Backs up Pi-hole configuration and Grafana/Prometheus data, then uploads
+# the archives to an FTP server. Run manually or via the daily cron job.
+
+set -euo pipefail
+
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+BACKUP_TEMP_DIR=$(mktemp -d /tmp/internet-pi-backup-XXXXXX)
+
+# Resolve config_dir (handle leading ~)
+CONFIG_DIR="{{ config_dir }}"
+CONFIG_DIR="${CONFIG_DIR/#\~/$HOME}"
+
+MONITORING_DIR="$CONFIG_DIR/internet-monitoring"
+PIHOLE_DIR="$CONFIG_DIR/pi-hole"
+
+# Docker Compose project name equals the directory name
+MONITORING_PROJECT=$(basename "$MONITORING_DIR")
+
+# FTP settings (set by Ansible)
+FTP_HOST="{{ backup_ftp_host }}"
+FTP_PORT="{{ backup_ftp_port | default(21) }}"
+FTP_USER="{{ backup_ftp_user }}"
+FTP_PASSWORD="{{ backup_ftp_password }}"
+FTP_PATH="{{ backup_ftp_path }}"
+
+RETENTION_DAYS="{{ backup_retention_days | default(7) }}"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+cleanup() {
+    rm -rf "$BACKUP_TEMP_DIR"
+}
+trap cleanup EXIT
+
+log "Starting Internet Pi backup (timestamp: $TIMESTAMP)..."
+
+UPLOAD_FILES=()
+
+{% if pihole_enable | default(false) %}
+# ---------------------------------------------------------------------------
+# Pi-hole backup (bind-mount directories)
+# ---------------------------------------------------------------------------
+log "Backing up Pi-hole data..."
+PIHOLE_ARCHIVE="pihole-${TIMESTAMP}.tar.gz"
+if tar -czf "$BACKUP_TEMP_DIR/$PIHOLE_ARCHIVE" -C "$PIHOLE_DIR" etc-pihole etc-dnsmasq.d; then
+    log "Pi-hole backup successful: $PIHOLE_ARCHIVE"
+    UPLOAD_FILES+=("$BACKUP_TEMP_DIR/$PIHOLE_ARCHIVE")
+else
+    log "WARNING: Pi-hole backup failed"
+fi
+{% endif %}
+
+{% if monitoring_enable | default(false) %}
+# ---------------------------------------------------------------------------
+# Grafana backup (Docker named volume)
+# ---------------------------------------------------------------------------
+log "Backing up Grafana data..."
+GRAFANA_ARCHIVE="grafana-${TIMESTAMP}.tar.gz"
+GRAFANA_VOLUME="${MONITORING_PROJECT}_grafana_data"
+if docker run --rm \
+    --volume "${GRAFANA_VOLUME}:/data:ro" \
+    --volume "$BACKUP_TEMP_DIR:/backup" \
+    alpine \
+    tar -czf "/backup/$GRAFANA_ARCHIVE" -C /data .; then
+    log "Grafana backup successful: $GRAFANA_ARCHIVE"
+    UPLOAD_FILES+=("$BACKUP_TEMP_DIR/$GRAFANA_ARCHIVE")
+else
+    log "WARNING: Grafana backup failed"
+fi
+
+# ---------------------------------------------------------------------------
+# Prometheus backup (Docker named volume)
+# ---------------------------------------------------------------------------
+log "Backing up Prometheus data..."
+PROMETHEUS_ARCHIVE="prometheus-${TIMESTAMP}.tar.gz"
+PROMETHEUS_VOLUME="${MONITORING_PROJECT}_prometheus_data"
+if docker run --rm \
+    --volume "${PROMETHEUS_VOLUME}:/data:ro" \
+    --volume "$BACKUP_TEMP_DIR:/backup" \
+    alpine \
+    tar -czf "/backup/$PROMETHEUS_ARCHIVE" -C /data .; then
+    log "Prometheus backup successful: $PROMETHEUS_ARCHIVE"
+    UPLOAD_FILES+=("$BACKUP_TEMP_DIR/$PROMETHEUS_ARCHIVE")
+else
+    log "WARNING: Prometheus backup failed"
+fi
+{% endif %}
+
+if [ ${#UPLOAD_FILES[@]} -eq 0 ]; then
+    log "No backup files were created. Exiting."
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Upload to FTP
+# ---------------------------------------------------------------------------
+log "Uploading backups to FTP server ($FTP_HOST)..."
+
+LFTP_SCRIPT=$(mktemp)
+{
+    echo "set net:max-retries 3"
+    echo "set net:timeout 30"
+    echo "open -p $FTP_PORT ftp://$FTP_HOST"
+    echo "login \"$FTP_USER\" \"$FTP_PASSWORD\""
+    echo "mkdir -p $FTP_PATH"
+    echo "cd $FTP_PATH"
+    echo "lcd $BACKUP_TEMP_DIR"
+    echo "mput *.tar.gz"
+    echo "bye"
+} > "$LFTP_SCRIPT"
+
+if lftp -f "$LFTP_SCRIPT"; then
+    log "FTP upload successful"
+else
+    log "ERROR: FTP upload failed"
+    rm -f "$LFTP_SCRIPT"
+    exit 1
+fi
+rm -f "$LFTP_SCRIPT"
+
+# ---------------------------------------------------------------------------
+# Prune old backups (keep the newest RETENTION_DAYS files per type)
+# ---------------------------------------------------------------------------
+if [ "$RETENTION_DAYS" -gt 0 ]; then
+    log "Pruning old backups (keeping last $RETENTION_DAYS per type)..."
+    for prefix in pihole grafana prometheus; do
+        LFTP_LIST=$(mktemp)
+        {
+            echo "set net:max-retries 3"
+            echo "set net:timeout 30"
+            echo "open -p $FTP_PORT ftp://$FTP_HOST"
+            echo "login \"$FTP_USER\" \"$FTP_PASSWORD\""
+            echo "cd $FTP_PATH"
+            echo "cls -1 --sort=name ${prefix}-*.tar.gz"
+            echo "bye"
+        } > "$LFTP_LIST"
+
+        # Sort by name (ISO timestamp → chronological order); remove all but newest N
+        OLD_FILES=$(lftp -f "$LFTP_LIST" 2>/dev/null | sort | head -n -"$RETENTION_DAYS" || true)
+        rm -f "$LFTP_LIST"
+
+        if [ -n "$OLD_FILES" ]; then
+            LFTP_DEL=$(mktemp)
+            {
+                echo "set net:max-retries 3"
+                echo "set net:timeout 30"
+                echo "open -p $FTP_PORT ftp://$FTP_HOST"
+                echo "login \"$FTP_USER\" \"$FTP_PASSWORD\""
+                echo "cd $FTP_PATH"
+                while IFS= read -r fname; do
+                    echo "rm \"$fname\""
+                done <<< "$OLD_FILES"
+                echo "bye"
+            } > "$LFTP_DEL"
+            lftp -f "$LFTP_DEL" 2>/dev/null || log "WARNING: Could not prune old $prefix backups"
+            rm -f "$LFTP_DEL"
+        fi
+    done
+fi
+
+{% if backup_smb_enable | default(false) %}
+# ---------------------------------------------------------------------------
+# Optional SMB upload
+# ---------------------------------------------------------------------------
+log "Uploading backups to SMB share ({{ backup_smb_share }})..."
+SMB_CREDS=$(mktemp)
+{
+    echo "username={{ backup_smb_user }}"
+    echo "password={{ backup_smb_password }}"
+} > "$SMB_CREDS"
+chmod 600 "$SMB_CREDS"
+
+for f in "${UPLOAD_FILES[@]}"; do
+    if smbclient "{{ backup_smb_share }}" -A "$SMB_CREDS" \
+        -c "mkdir {{ backup_smb_path }}; cd {{ backup_smb_path }}; put \"$f\" \"$(basename "$f")\"" 2>/dev/null; then
+        log "SMB upload of $(basename "$f") successful"
+    else
+        log "WARNING: SMB upload of $(basename "$f") failed"
+    fi
+done
+rm -f "$SMB_CREDS"
+{% endif %}
+
+log "Backup completed successfully!"

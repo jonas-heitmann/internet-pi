@@ -57,3 +57,7 @@
     - name: Set up local SMB server.
       ansible.builtin.import_tasks: tasks/samba.yml
       when: smb_enable
+
+    - name: Set up backup.
+      ansible.builtin.import_tasks: tasks/backup.yml
+      when: backup_enable | default(false)

@@ -1,0 +1,165 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# Internet Pi Restore Script
+#
+# Downloads the latest backups from the FTP server and restores Pi-hole,
+# Grafana, and Prometheus data. Run this on a new or existing server to
+# recover from the most recent backup.
+#
+# Usage: sudo /usr/local/bin/internet-pi-restore
+
+set -euo pipefail
+
+RESTORE_TEMP_DIR=$(mktemp -d /tmp/internet-pi-restore-XXXXXX)
+
+# Resolve config_dir (handle leading ~)
+CONFIG_DIR="{{ config_dir }}"
+CONFIG_DIR="${CONFIG_DIR/#\~/$HOME}"
+
+MONITORING_DIR="$CONFIG_DIR/internet-monitoring"
+PIHOLE_DIR="$CONFIG_DIR/pi-hole"
+
+# Docker Compose project name equals the directory name
+MONITORING_PROJECT=$(basename "$MONITORING_DIR")
+
+# FTP settings (set by Ansible)
+FTP_HOST="{{ backup_ftp_host }}"
+FTP_PORT="{{ backup_ftp_port | default(21) }}"
+FTP_USER="{{ backup_ftp_user }}"
+FTP_PASSWORD="{{ backup_ftp_password }}"
+FTP_PATH="{{ backup_ftp_path }}"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+cleanup() {
+    rm -rf "$RESTORE_TEMP_DIR"
+}
+trap cleanup EXIT
+
+# Returns the filename of the latest backup for a given prefix, or empty string.
+get_latest_file() {
+    local prefix="$1"
+    local lftp_cmd
+    lftp_cmd=$(mktemp)
+    {
+        echo "set net:max-retries 3"
+        echo "set net:timeout 30"
+        echo "open -p $FTP_PORT ftp://$FTP_HOST"
+        echo "login \"$FTP_USER\" \"$FTP_PASSWORD\""
+        echo "cd $FTP_PATH"
+        echo "cls -1 --sort=name ${prefix}-*.tar.gz"
+        echo "bye"
+    } > "$lftp_cmd"
+    local latest
+    latest=$(lftp -f "$lftp_cmd" 2>/dev/null | sort | tail -n 1 || true)
+    rm -f "$lftp_cmd"
+    echo "$latest"
+}
+
+# Downloads a single file from the FTP server to a local destination.
+download_file() {
+    local remote_file="$1"
+    local local_dest="$2"
+    local lftp_cmd
+    lftp_cmd=$(mktemp)
+    {
+        echo "set net:max-retries 3"
+        echo "set net:timeout 30"
+        echo "open -p $FTP_PORT ftp://$FTP_HOST"
+        echo "login \"$FTP_USER\" \"$FTP_PASSWORD\""
+        echo "cd $FTP_PATH"
+        echo "get \"$remote_file\" -o \"$local_dest\""
+        echo "bye"
+    } > "$lftp_cmd"
+    lftp -f "$lftp_cmd"
+    rm -f "$lftp_cmd"
+}
+
+log "Starting Internet Pi restore from FTP server ($FTP_HOST)..."
+
+{% if pihole_enable | default(false) %}
+# ---------------------------------------------------------------------------
+# Pi-hole restore (bind-mount directories)
+# ---------------------------------------------------------------------------
+log "Looking for latest Pi-hole backup..."
+PIHOLE_FILE=$(get_latest_file "pihole")
+if [ -n "$PIHOLE_FILE" ]; then
+    log "Downloading Pi-hole backup: $PIHOLE_FILE"
+    download_file "$PIHOLE_FILE" "$RESTORE_TEMP_DIR/pihole.tar.gz"
+
+    log "Stopping Pi-hole containers..."
+    docker compose -f "$PIHOLE_DIR/docker-compose.yml" stop || true
+
+    log "Restoring Pi-hole data to $PIHOLE_DIR..."
+    tar -xzf "$RESTORE_TEMP_DIR/pihole.tar.gz" -C "$PIHOLE_DIR"
+
+    log "Starting Pi-hole containers..."
+    docker compose -f "$PIHOLE_DIR/docker-compose.yml" up -d
+
+    log "Pi-hole restore complete!"
+else
+    log "WARNING: No Pi-hole backup found on FTP server – skipping"
+fi
+{% endif %}
+
+{% if monitoring_enable | default(false) %}
+# ---------------------------------------------------------------------------
+# Grafana restore (Docker named volume)
+# ---------------------------------------------------------------------------
+log "Looking for latest Grafana backup..."
+GRAFANA_FILE=$(get_latest_file "grafana")
+GRAFANA_VOLUME="${MONITORING_PROJECT}_grafana_data"
+if [ -n "$GRAFANA_FILE" ]; then
+    log "Downloading Grafana backup: $GRAFANA_FILE"
+    download_file "$GRAFANA_FILE" "$RESTORE_TEMP_DIR/grafana.tar.gz"
+
+    log "Stopping Grafana container..."
+    docker compose -f "$MONITORING_DIR/docker-compose.yml" stop grafana || true
+
+    log "Restoring Grafana data into volume $GRAFANA_VOLUME..."
+    docker run --rm \
+        --volume "${GRAFANA_VOLUME}:/data" \
+        --volume "$RESTORE_TEMP_DIR:/backup:ro" \
+        alpine \
+        sh -c "tar -tzf /backup/grafana.tar.gz > /dev/null && find /data -mindepth 1 -delete && tar -xzf /backup/grafana.tar.gz -C /data"
+
+    log "Starting Grafana container..."
+    docker compose -f "$MONITORING_DIR/docker-compose.yml" up -d grafana
+
+    log "Grafana restore complete!"
+else
+    log "WARNING: No Grafana backup found on FTP server – skipping"
+fi
+
+# ---------------------------------------------------------------------------
+# Prometheus restore (Docker named volume)
+# ---------------------------------------------------------------------------
+log "Looking for latest Prometheus backup..."
+PROMETHEUS_FILE=$(get_latest_file "prometheus")
+PROMETHEUS_VOLUME="${MONITORING_PROJECT}_prometheus_data"
+if [ -n "$PROMETHEUS_FILE" ]; then
+    log "Downloading Prometheus backup: $PROMETHEUS_FILE"
+    download_file "$PROMETHEUS_FILE" "$RESTORE_TEMP_DIR/prometheus.tar.gz"
+
+    log "Stopping Prometheus container..."
+    docker compose -f "$MONITORING_DIR/docker-compose.yml" stop prometheus || true
+
+    log "Restoring Prometheus data into volume $PROMETHEUS_VOLUME..."
+    docker run --rm \
+        --volume "${PROMETHEUS_VOLUME}:/data" \
+        --volume "$RESTORE_TEMP_DIR:/backup:ro" \
+        alpine \
+        sh -c "tar -tzf /backup/prometheus.tar.gz > /dev/null && find /data -mindepth 1 -delete && tar -xzf /backup/prometheus.tar.gz -C /data"
+
+    log "Starting Prometheus container..."
+    docker compose -f "$MONITORING_DIR/docker-compose.yml" up -d prometheus
+
+    log "Prometheus restore complete!"
+else
+    log "WARNING: No Prometheus backup found on FTP server – skipping"
+fi
+{% endif %}
+
+log "Restore process finished."
