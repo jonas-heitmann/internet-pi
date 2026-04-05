@@ -51,3 +51,6 @@ starlink_enable: false
 
 # SMB-Server configuration
 smb_enable: true
+
+# Unattended upgrades configuration.
+unattended_upgrades_enable: true

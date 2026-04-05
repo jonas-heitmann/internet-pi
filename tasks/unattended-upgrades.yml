@@ -1,0 +1,19 @@
+---
+- name: Ensure unattended-upgrades is installed.
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - apt-listchanges
+    state: present
+
+- name: Ensure unattended-upgrades is configured.
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      // Run 'apt-get update' automatically every 1 day.
+      APT::Periodic::Update-Package-Lists "1";
+      // Run 'apt-get upgrade --download-only' and apply security updates every 1 day.
+      APT::Periodic::Unattended-Upgrade "1";
+    owner: root
+    group: root
+    mode: '0644'

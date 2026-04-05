@@ -57,3 +57,9 @@
     - name: Set up local SMB server.
       ansible.builtin.import_tasks: tasks/samba.yml
       when: smb_enable
+
+    - name: Set up unattended upgrades.
+      ansible.builtin.import_tasks: tasks/unattended-upgrades.yml
+      when:
+        - unattended_upgrades_enable
+        - ansible_facts.os_family == "Debian"
