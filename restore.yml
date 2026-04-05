@@ -14,10 +14,29 @@
       ansible.builtin.include_vars: vault.yml
 
   tasks:
-    - name: Install lftp for FTP downloads.
+    - name: Install packages for FTP downloads.
       ansible.builtin.package:
-        name: lftp
+        name:
+          - ca-certificates
+          - lftp
         state: present
+
+    - name: Install custom CA certificate for FTP backup server.
+      ansible.builtin.copy:
+        src: "{{ backup_ftp_ca_cert_src }}"
+        dest: /usr/local/share/ca-certificates/internet-pi-backup-ftp.crt
+        owner: root
+        group: root
+        mode: '0644'
+      when: backup_ftp_ca_cert_src | default('') | length > 0
+      notify: Refresh CA certificates
+
+    - name: Remove custom CA certificate for FTP backup server when unset.
+      ansible.builtin.file:
+        path: /usr/local/share/ca-certificates/internet-pi-backup-ftp.crt
+        state: absent
+      when: backup_ftp_ca_cert_src | default('') | length == 0
+      notify: Refresh CA certificates
 
     - name: Deploy restore script.
       ansible.builtin.template:
@@ -27,7 +46,15 @@
         owner: root
         group: root
 
+    - name: Refresh CA certificates before restore.
+      ansible.builtin.meta: flush_handlers
+
     - name: Run restore script.
       ansible.builtin.command: /usr/local/bin/internet-pi-restore
       when: backup_enable | default(false)
+      changed_when: true
+
+  handlers:
+    - name: Refresh CA certificates
+      ansible.builtin.command: update-ca-certificates
       changed_when: true

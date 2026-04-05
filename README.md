@@ -112,6 +112,10 @@ Alternatively, you may update the initial `config.yml` in the the repo folder an
 
 A guide for backing up the configurations and historical data will be posted here as part of [Issue #194: Create Backup guide](https://github.com/geerlingguy/internet-pi/issues/194).
 
+If your FTP server uses TLS with a certificate that is not signed by a public CA, add the issuing CA certificate to the repository (for example at `files/backup-ftp-ca.crt`) and set `backup_ftp_ca_cert_src` in `config.yml`. The playbook will install that CA on the Pi and refresh the trust store so `lftp` can verify the server certificate during backup and restore.
+
+As a temporary workaround, you can set `backup_ftp_tls_verify: false` in `config.yml`, but that disables certificate verification and is less secure.
+
 ## Uninstall
 
 To remove `internet-pi` from your system, run the following commands (assuming the default install location of `~`, your home directory):

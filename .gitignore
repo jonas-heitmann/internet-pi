@@ -3,3 +3,5 @@ config.yml
 .DS_Store
 .idea
 .ansible/
+
+boxcert.cer

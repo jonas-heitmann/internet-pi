@@ -106,6 +106,7 @@ LFTP_SCRIPT=$(mktemp)
 {
     echo "set net:max-retries 3"
     echo "set net:timeout 30"
+    echo "set ssl:verify-certificate {% if backup_ftp_tls_verify | default(true) %}yes{% else %}no{% endif %}"
     echo "open -p $FTP_PORT ftp://$FTP_HOST"
     echo "login \"$FTP_USER\" \"$FTP_PASSWORD\""
     echo "mkdir -p $FTP_PATH"
@@ -134,6 +135,7 @@ if [ "$RETENTION_DAYS" -gt 0 ]; then
         {
             echo "set net:max-retries 3"
             echo "set net:timeout 30"
+            echo "set ssl:verify-certificate {% if backup_ftp_tls_verify | default(true) %}yes{% else %}no{% endif %}"
             echo "open -p $FTP_PORT ftp://$FTP_HOST"
             echo "login \"$FTP_USER\" \"$FTP_PASSWORD\""
             echo "cd $FTP_PATH"
@@ -150,6 +152,7 @@ if [ "$RETENTION_DAYS" -gt 0 ]; then
             {
                 echo "set net:max-retries 3"
                 echo "set net:timeout 30"
+                echo "set ssl:verify-certificate {% if backup_ftp_tls_verify | default(true) %}yes{% else %}no{% endif %}"
                 echo "open -p $FTP_PORT ftp://$FTP_HOST"
                 echo "login \"$FTP_USER\" \"$FTP_PASSWORD\""
                 echo "cd $FTP_PATH"

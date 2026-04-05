@@ -55,12 +55,17 @@ smb_enable: true
 # Backup configuration.
 # Backs up Pi-hole and Grafana/Prometheus data to an FTP server (e.g. a NAS).
 # Passwords with double-quote (") characters must be escaped as \".
-backup_enable: false
+backup_enable: true
 backup_ftp_host: "nas.home.local"
 backup_ftp_port: 21
 backup_ftp_user: "backup"
 backup_ftp_password: "change-this-password"
 backup_ftp_path: "/internet-pi"
+backup_ftp_tls_verify: true
+# Optional: path to the issuing CA certificate (PEM/CRT) on the Ansible control
+# machine. The playbook installs it into the Pi's trust store so lftp accepts the
+# FTPS certificate. Example: "files/backup-ftp-ca.crt"
+backup_ftp_ca_cert_src: ""
 
 # Optional: also upload backups to an SMB share.
 backup_smb_enable: false
