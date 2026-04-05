@@ -12,7 +12,7 @@ BACKUP_TEMP_DIR=$(mktemp -d /tmp/internet-pi-backup-XXXXXX)
 
 # Resolve config_dir (handle leading ~)
 CONFIG_DIR="{{ config_dir }}"
-CONFIG_DIR="${CONFIG_DIR/#\~/$HOME}"
+{% raw %}CONFIG_DIR="${CONFIG_DIR/#\~/$HOME}"{% endraw %}
 
 MONITORING_DIR="$CONFIG_DIR/internet-monitoring"
 PIHOLE_DIR="$CONFIG_DIR/pi-hole"
@@ -92,7 +92,7 @@ else
 fi
 {% endif %}
 
-if [ ${#UPLOAD_FILES[@]} -eq 0 ]; then
+{% raw %}if [ ${#UPLOAD_FILES[@]} -eq 0 ]; then{% endraw %}
     log "No backup files were created. Exiting."
     exit 0
 fi
